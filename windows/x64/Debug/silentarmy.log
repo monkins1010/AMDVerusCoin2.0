@@ -1,0 +1,23 @@
+﻿  main.c
+  Importing getopt library
+c:\users\chris\desktop\genoil\silentarmy-windows\main.c(287): warning C4267: 'function': conversion from 'size_t' to 'unsigned int', possible loss of data
+c:\users\chris\desktop\genoil\silentarmy-windows\main.c(318): warning C4267: 'function': conversion from 'size_t' to 'unsigned int', possible loss of data
+c:\users\chris\desktop\genoil\silentarmy-windows\main.c(756): warning C4267: 'function': conversion from 'size_t' to 'uint32_t', possible loss of data
+c:\users\chris\desktop\genoil\silentarmy-windows\main.c(971): warning C4047: '=': 'uint32_t' differs in levels of indirection from 'uint32_t *'
+c:\users\chris\desktop\genoil\silentarmy-windows\main.c(996): warning C4267: 'function': conversion from 'size_t' to 'uint32_t', possible loss of data
+c:\users\chris\desktop\genoil\silentarmy-windows\main.c(1102): warning C4047: 'function': 'uint32_t **' differs in levels of indirection from 'uint32_t *'
+c:\users\chris\desktop\genoil\silentarmy-windows\main.c(1102): warning C4024: 'verify_nonce': different types for formal and actual parameter 11
+c:\users\chris\desktop\genoil\silentarmy-windows\main.c(1128): warning C4101: 'n': unreferenced local variable
+c:\users\chris\desktop\genoil\silentarmy-windows\main.c(1292): warning C4244: 'initializing': conversion from 'double' to 'uint64_t', possible loss of data
+c:\users\chris\desktop\genoil\silentarmy-windows\main.c(1289): warning C4101: 'shares': unreferenced local variable
+c:\users\chris\desktop\genoil\silentarmy-windows\main.c(1293): warning C4101: 'status': unreferenced local variable
+c:\users\chris\desktop\genoil\silentarmy-windows\main.c(1283): warning C4101: 'line': unreferenced local variable
+c:\users\chris\desktop\genoil\silentarmy-windows\main.c(1294): warning C4101: 'args': unreferenced local variable
+c:\users\chris\desktop\genoil\silentarmy-windows\main.c(1521): warning C4090: 'function': different 'const' qualifiers
+c:\users\chris\desktop\genoil\silentarmy-windows\main.c(1515): warning C4996: 'clCreateCommandQueue': was declared deprecated
+  c:\program files (x86)\amd app sdk\3.0\include\cl\cl.h(1359): note: see declaration of 'clCreateCommandQueue'
+c:\users\chris\desktop\genoil\silentarmy-windows\main.c(1579): warning C4267: 'return': conversion from 'size_t' to 'uint32_t', possible loss of data
+c:\users\chris\desktop\genoil\silentarmy-windows\main.c(1596): warning C4267: 'return': conversion from 'size_t' to 'uint32_t', possible loss of data
+c:\users\chris\desktop\genoil\silentarmy-windows\main.c(1700): warning C4244: '=': conversion from 'uint64_t' to 'uint32_t', possible loss of data
+  silentarmy.vcxproj -> C:\Users\Chris\Desktop\genoil\silentarmy-windows\windows\\..\sa-solver.exe
+  silentarmy.vcxproj -> C:\Users\Chris\Desktop\genoil\silentarmy-windows\windows\\..\sa-solver.pdb (Full PDB)
