@@ -1,0 +1,2 @@
+silentarmy.exe --list
+pause
