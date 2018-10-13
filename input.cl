@@ -145,7 +145,7 @@ __kernel void kernel_verushash(__global uchar *midstate, __global ulong *output,
                 in[i] = s[i];  
 	
    mem_fence(CLK_LOCAL_MEM_FENCE);
-#pragma unroll 5
+#pragma unroll 5   //unroll 5 works great on most cards, use 1 if you have no shares
 	for (i = 0; i < 5; ++i) {
 		// aes round(s)
 		
