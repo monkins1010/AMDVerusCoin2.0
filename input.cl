@@ -145,7 +145,7 @@ __kernel void kernel_verushash(__global uchar *midstate, __global ulong *output,
                 in[i] = s[i];  
 	
    mem_fence(CLK_LOCAL_MEM_FENCE);
-#pragma unroll 5   //unroll 5 works great on most cards, use 1 if you have no shares
+
 	for (i = 0; i < 5; ++i) {
 		// aes round(s)
 		
@@ -172,24 +172,18 @@ __kernel void kernel_verushash(__global uchar *midstate, __global ulong *output,
 	}
 
 	
-	for (i = 0; i < 64; i++) {
+	for (i = 24; i < 56; i++) {
 		s[i] = s[i] ^ in[i];
 	}
 
-	/* Truncated */
-	//memcpy_decker(tmp, s + 8, 8);
-	//memcpy_decker(tmp + 8, s + 24, 8);
-	//memcpy_decker(tmp + 16, s + 32, 8);
 	memcpy_decker(tmp + 24, s + 48, 8);
-       // mem_fence(CLK_LOCAL_MEM_FENCE);  
+
 	   
     
 if(((ulong*)&tmp[0])[3] < target[3])
 { 
    output[0] = gid;
- //  for (i = 0; i < 8; ++i)
-//printf("%02x",((uchar *)&gid)[i]);
-///printf("=gid\n");
+
 
 }
       
