@@ -12,8 +12,8 @@ CFLAGS = -O2 -std=gnu99 -pedantic -Wextra -Wall \
     -Wno-unused-parameter
 LDFLAGS = -rdynamic -L${LIBOPENCL}
 LDLIBS = -lOpenCL
-OBJ = main.o haraka_portable.o 
-INCLUDES =  param.h _kernel.h sha256.h haraka_portable.h
+OBJ = main.o haraka_portable.o
+INCLUDES =  param.h _kernel.h haraka_portable.h
 
 all : sa-solver
 
