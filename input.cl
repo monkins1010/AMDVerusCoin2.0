@@ -1,4 +1,4 @@
-#pragma OPENCL EXTENSION cl_nvidia_printf : enable
+
 #define VERUS_KEY_SIZE 8832
 #define VERUS_KEY_SIZE128 552
 #define THREADS 64
@@ -42,7 +42,7 @@ void memcpy(unsigned char *dst, unsigned char *src, int len) {
 
 
 #define AES4_LAST(s3, rci) \
-  aesenc((unsigned char *)&s3, &rc[rci + 2],sharedMemory1); \
+  aesenc((unsigned char *)&s3, &rc[rci + 2], sharedMemory1); \
   aesenc_last((unsigned char *)&s3, &rc[rci + 6], sharedMemory1); \
 
 
@@ -210,7 +210,7 @@ uint128m _mm_unpackhi_epi32_emu(uint128m a, uint128m b)
 	return b;
 }
 
-void aesenc_last(unsigned char *s,    uint128m *rk, __local uint *sharedMemory1)
+void aesenc_last(unsigned char *s,   uint128m *rk, __local uint *sharedMemory1)
 {
 
 	uint32_t  v[4];
@@ -249,7 +249,7 @@ void aesenc_last(unsigned char *s,    uint128m *rk, __local uint *sharedMemory1)
 	((uint128m*)&s[0])[0].z = ((uint32_t*)&s[0])[2] ^ rk[0].z;
 }
 
-inline void aesenc(unsigned char *s,    uint128m *rk, __local uint *sharedMemory1)
+inline void aesenc(unsigned char *s,  uint128m *rk, __local uint *sharedMemory1)
 {
 	uint32_t  v[4];
 	//const uint128m rk2 = ((uint128m*)&rk[0])[0];
@@ -309,7 +309,7 @@ inline void aesenc(unsigned char *s,    uint128m *rk, __local uint *sharedMemory
 #define AES2_EMU2(s0, s1, rci) \
   aesenc4((unsigned char *)&s0, (unsigned char *)&s1, &rc[rci], sharedMemory1); 
 
-void aesenc4(unsigned char *s1, unsigned char *s2,    uint128m *rk, __local uint *sharedMemory1)
+void aesenc4(unsigned char *s1, unsigned char *s2,  uint128m *rk, __local uint *sharedMemory1)
 {
 	uint32_t v[4];
 	uint32_t t, w, u;
@@ -516,9 +516,7 @@ void aesenc4(unsigned char *s1, unsigned char *s2,    uint128m *rk, __local uint
 	((uint*)&s2[0])[2] = ((uint32_t*)&s2[0])[2] ^ rk[3].z;
 	((uint*)&s2[0])[3] = ((uint32_t*)&s2[0])[3] ^ rk[3].w;
 
-	uint128m tmp;
-	MIX2_EMU(((uint128m*)&s1)[0], ((uint128m*)&s2)[0]);
-	//_mm_unpackboth_epi32_emu((uint128m*)s1, (uint128m*)s2);
+	
 }
 
 uint128m _mm_cvtsi32_si128_emu(uint32_t lo)
@@ -713,13 +711,13 @@ void case_0c(uint128m *prand, uint128m *prandex, const  uint128m *pbuf,
 }
 
 void case_10(uint128m *prand, uint128m *prandex, const  uint128m *pbuf,
-	uint64_t selector, uint128m *acc,    uint128m *randomsource, uint32_t prand_idx, __local uint32_t *sharedMemory1)
+	uint64_t selector, uint128m *acc,   uint128m *randomsource, uint32_t prand_idx, __local uint32_t *sharedMemory1)
 {			// a few AES operations
 	//uint128m rc[12];
 
 	//rc[0] = prand[0];
 
-	  uint128m *rc = &randomsource[prand_idx];
+	   uint128m *rc = &randomsource[prand_idx];
 	/*rc[1] = randomsource[prand_idx + 1];
 	rc[2] = randomsource[prand_idx + 2];
 	rc[3] = randomsource[prand_idx + 3];
@@ -766,7 +764,7 @@ void case_14(uint128m *prand, uint128m *prandex, const  uint128m *pbuf,
 	//	uint128m tmp; // used by MIX2
 
 	uint64_t rounds = selector >> 61; // loop randomly between 1 and 8 times
-	  uint128m *rc = &randomsource[prand_idx];
+	   uint128m *rc = &randomsource[prand_idx];
 
 
 	uint64_t aesround = 0;
@@ -784,6 +782,7 @@ void case_14(uint128m *prand, uint128m *prandex, const  uint128m *pbuf,
 				const uint128m add1 = _mm_xor_si128_emu(onekey, temp2);
 				const uint128m clprod1 = _mm_clmulepi64_si128_emu(add1, add1, 0x10);
 				acc[0] = _mm_xor_si128_emu(clprod1, acc[0]);
+				
 			}
 			else
 			{
@@ -797,8 +796,9 @@ void case_14(uint128m *prand, uint128m *prandex, const  uint128m *pbuf,
 
 				acc[0] = _mm_xor_si128_emu(onekey, acc[0]);
 				acc[0] = _mm_xor_si128_emu(temp2, acc[0]);
-
+				
 			}
+
 		}
 		(rounds--);
 	}
@@ -890,6 +890,7 @@ uint128m __verusclmulwithoutreduction64alignedrepeatgpu(  uint128m * randomsourc
 
 	prand = randomsource[prand_idx];
 	prandex = randomsource[prandex_idx];
+
 	//#pragma unroll
 	for (uint8_t i = 0; i < 32; i++)
 	{
@@ -955,7 +956,7 @@ uint128m __verusclmulwithoutreduction64alignedrepeatgpu(  uint128m * randomsourc
 
 		randomsource[prand_idx] = prand;
 		randomsource[prandex_idx] = prandex;
-
+		
 	}
 
 	return acc;
@@ -1010,36 +1011,38 @@ ulong precompReduction64(uint128m A) {
 
 
 
-__kernel void verus_gpu_hash(__constant uint *startNonce, __constant uint128m *d_key_input,
-	__constant uint128m *blockhash_half, __global uint *resNonce, __global uint *target)
+__kernel void verus_gpu_hash(__global uint *startNonce, __global uint128m *d_key_input,
+	__global uint128m *blockhash_half, __global uint *resNonce, __global uint *target, __global uint128m *d_key2)
 {
-	uint thread = get_global_id(0);
-	uint128m mid; // , biddy[VERUS_KEY_SIZE128];
-	uint128m s[4];
+	__private uint thread = ((uint)get_global_id(0) & 0xffffffffu);
+	__private uint128m mid; // , biddy[VERUS_KEY_SIZE128];
+	__private uint128m s[4];
 	__private	uint128m pkey[VERUS_KEY_SIZE128];
 
-	const uint nounce = startNonce[0] + thread;
+	__private  uint nounce = startNonce[0] + thread;
 
 	__local  uint sharedMemory1[THREADS];
 	__private uint lid = get_local_id(0);
 
-//	__global uint128m *pkey = &d_key2[0] + (lid * VERUS_KEY_SIZE128);
+	//__global uint128m *pkey = &d_key2[0] + (lid * VERUS_KEY_SIZE128);
 		
-	for (int i = 0; i < VERUS_KEY_SIZE128; i++)
+	for (int i = 0; i < VERUS_KEY_SIZE128; i++) {
+		
 		pkey[i] = d_key_input[i];
-
+	}
+	
 	s[0] = blockhash_half[0];
 	s[1] = blockhash_half[1];
 	s[2] = blockhash_half[2];
 	s[3] = blockhash_half[3];
 
-
+	
 	sharedMemory1[lid] = sbox[lid];// copy sbox to shared mem
-
+	
 	mem_fence(CLK_LOCAL_MEM_FENCE);
 	((uint *)&s)[8] = nounce;
 
-	mid = __verusclmulwithoutreduction64alignedrepeatgpu(pkey, s, sharedMemory1);
+	mid = __verusclmulwithoutreduction64alignedrepeatgpu(pkey, s, &sharedMemory1[0]);
 	mid.x ^= 0x00010000;
 
 
@@ -1060,11 +1063,9 @@ __kernel void verus_gpu_hash(__constant uint *startNonce, __constant uint128m *d
 
 	acc &= 511;
 
-	hash = haraka512_port_keyed2222((const uchar*)s, &pkey[acc], sharedMemory1);
+	hash = haraka512_port_keyed2222((const uchar*)s, pkey +acc, &sharedMemory1[0]);
 
 	if (hash < target[7]) {
-		printf("GPU(nonce=%08x)\n", nounce);
-	 printf("GPU hash end= %08x\n", hash);
 		resNonce[0] = nounce;
 	}
 };

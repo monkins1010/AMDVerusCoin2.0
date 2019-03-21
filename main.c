@@ -18,6 +18,7 @@
 
 #include <errno.h>
 #include <CL/cl.h>
+#include "blake.h"
 #include "sha256.h"
 
 #ifdef WIN32
@@ -133,7 +134,6 @@ uint64_t now(void)
 {
 	struct timeval	tv;
 	gettimeofday(&tv, NULL);
- 
 	return (uint64_t)tv.tv_sec * 1000 * 1000 + tv.tv_usec;
 }
 
@@ -1004,7 +1004,40 @@ void Verus2hash(unsigned char *hash, unsigned char *curBuf, uint32_t nonce)
 **
 ** Return 1 iff the block hash is under the target.
 */
-
+uint32_t print_solver_line(uint32_t *values, uint8_t *header,
+	size_t fixed_nonce_bytes, uint8_t *target, char *job_id)
+{
+	uint8_t	buffer[ZCASH_BLOCK_HEADER_LEN + ZCASH_SOLSIZE_LEN +
+		ZCASH_SOL_LEN];
+	uint8_t	hash0[SHA256_DIGEST_SIZE];
+	uint8_t	hash1[SHA256_DIGEST_SIZE];
+	uint8_t	*p;
+	p = buffer;
+	memcpy(p, header, ZCASH_BLOCK_HEADER_LEN);
+	p += ZCASH_BLOCK_HEADER_LEN;
+	memcpy(p, "\xfd\x40\x05", ZCASH_SOLSIZE_LEN);
+	p += ZCASH_SOLSIZE_LEN;
+	store_encoded_sol(p, values, 1 << PARAM_K);
+	Sha256_Onestep(buffer, sizeof(buffer), hash0);
+	Sha256_Onestep(hash0, sizeof(hash0), hash1);
+	// compare the double SHA256 hash with the target
+	if (cmp_target_256(target, hash1) < 0)
+	{
+		debug("Hash is above target\n");
+		return 0;
+	}
+	debug("Hash is under target\n");
+	printf("sol: %s ", job_id);
+	p = header + ZCASH_BLOCK_OFFSET_NTIME;
+	printf("%02x%02x%02x%02x ", p[0], p[1], p[2], p[3]);
+	printf("%s ", s_hexdump(header + ZCASH_BLOCK_HEADER_LEN - ZCASH_NONCE_LEN +
+		fixed_nonce_bytes, ZCASH_NONCE_LEN - fixed_nonce_bytes));
+	printf("%s%s\n", ZCASH_SOLSIZE_HEX,
+		s_hexdump(buffer + ZCASH_BLOCK_HEADER_LEN + ZCASH_SOLSIZE_LEN,
+			ZCASH_SOL_LEN));
+	fflush(stdout);
+	return 1;
+}
 
 int sol_cmp(const void *_a, const void *_b)
 {
@@ -1026,7 +1059,44 @@ int sol_cmp(const void *_a, const void *_b)
 ** In mining mode, return the number of shares, that is the number of solutions
 ** that were under the target.
 */
-
+uint32_t print_sols(sols_t *all_sols, uint64_t *nonce, uint32_t nr_valid_sols,
+	uint8_t *header, size_t fixed_nonce_bytes, uint8_t *target,
+	char *job_id)
+{
+	uint8_t		*valid_sols;
+	uint32_t		counted;
+	uint32_t		shares = 0;
+	valid_sols = malloc(nr_valid_sols * SOL_SIZE);
+	if (!valid_sols)
+		fatal("malloc: %s\n", strerror(errno));
+	counted = 0;
+	for (uint32_t i = 0; i < all_sols->nr; i++)
+		if (all_sols->valid[i])
+		{
+			if (counted >= nr_valid_sols)
+				fatal("Bug: more than %d solutions\n", nr_valid_sols);
+			memcpy(valid_sols + counted * SOL_SIZE, all_sols->values[i],
+				SOL_SIZE);
+			counted++;
+		}
+	assert(counted == nr_valid_sols);
+	// sort the solutions amongst each other, to make the solver's output
+	// deterministic and testable
+	qsort(valid_sols, nr_valid_sols, SOL_SIZE, sol_cmp);
+	for (uint32_t i = 0; i < nr_valid_sols; i++)
+	{
+		uint32_t	*inputs = (uint32_t *)(valid_sols + i * SOL_SIZE);
+		if (!mining && show_encoded)
+			print_encoded_sol(inputs, 1 << PARAM_K);
+		if (verbose)
+			print_sol(inputs, nonce);
+		if (mining)
+			shares += print_solver_line(inputs, header, fixed_nonce_bytes,
+				target, job_id);
+	}
+	free(valid_sols);
+	return shares;
+}
 
 /*
 ** Sort a pair of binary blobs (a, b) which are consecutive in memory and
@@ -1401,7 +1471,7 @@ void mining_mode(cl_device_id dev_id, cl_program program, cl_context ctx, cl_com
 	uint64_t		t0 = 0, t1;
 	uint64_t		status_period = 300e3; // time (usec) between statuses
 	cl_int          status;
-	uint8_t         blockhash_half[64] = { 0 };
+	uint8_t         *blockhash_half; // [64] = { 0 };
 	uint8_t         *ptarget;
 	uint32_t		*pnonces;
 	cl_mem          key_const_d, data_keylarge_d, verushead_d, target_d, nonces_d, startNonce_d;
@@ -1418,19 +1488,19 @@ void mining_mode(cl_device_id dev_id, cl_program program, cl_context ctx, cl_com
 	uint8_t full_data[140 + 3 + 1344] = { 0 };
 	uint8_t* sol_data = &full_data[140];
 
-	//blockhash_half = (uint8_t*)malloc(sizeof(uint8_t) * 64);
+	blockhash_half = (uint8_t*)malloc(sizeof(uint8_t) * 64);
 	ptarget = (uint8_t *)malloc(sizeof(uint8_t) * 32);
 	pnonces = (uint32_t *)malloc(sizeof(uint32_t) * 1);
 	nonce_sum = (uint32_t *)malloc(sizeof(uint32_t) * 1);
-	data_key = (u128 *)malloc(VERUS_KEY_SIZE128);
+	data_key = (u128 *)malloc(VERUS_KEY_SIZE);
 	uint32_t num_sols;
 
 	key_const_d = check_clCreateBuffer(ctx, CL_MEM_READ_ONLY, sizeof(uint8_t) * VERUS_KEY_SIZE, NULL);
-	verushead_d = check_clCreateBuffer(ctx, CL_MEM_READ_ONLY, sizeof(uint8_t) * 64, NULL);
-	target_d = check_clCreateBuffer(ctx, CL_MEM_READ_ONLY, sizeof(uint8_t) * 32, NULL);
+	verushead_d = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, sizeof(uint8_t) * 64, NULL);
+	target_d = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, sizeof(uint8_t) * 32, NULL);
 	nonces_d = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, sizeof(uint32_t) * 2, NULL);
 	startNonce_d = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, sizeof(uint32_t) * 2, NULL);
-	//data_keylarge_d = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, sizeof(uint8_t) * VERUS_KEY_SIZE * (MAIN_THREADS+1), NULL);
+	data_keylarge_d = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, sizeof(uint8_t) * 1, NULL);
 
 	nonce_ptr = (uint64_t *)(header + ZCASH_BLOCK_HEADER_LEN - ZCASH_NONCE_LEN);
 
@@ -1515,32 +1585,33 @@ void mining_mode(cl_device_id dev_id, cl_program program, cl_context ctx, cl_com
 
 
 		}
+		
 			pnonces[0] = 0xfffffffful;
 			status = clEnqueueWriteBuffer(queue, verushead_d, CL_TRUE, 0, sizeof(uint8_t) * 64, blockhash_half, 0, NULL, NULL);
-			if (status != CL_SUCCESS)fatal("clEnqueueWriteBuffer (%d)\n", status);
+			if (status != CL_SUCCESS)printf("clEnqueueWriteBuffer (%d)\n", status);
 			status = clEnqueueWriteBuffer(queue, target_d, CL_TRUE, 0, sizeof(uint8_t) * 32, ptarget, 0, NULL, NULL);
-			if (status != CL_SUCCESS)fatal("clEnqueueWriteBuffer (%d)\n", status);
+			if (status != CL_SUCCESS)printf("clEnqueueWriteBuffer (%d)\n", status);
 			status = clEnqueueWriteBuffer(queue, key_const_d, CL_TRUE, 0, sizeof(uint8_t) * VERUS_KEY_SIZE, data_key, 0, NULL, NULL);
-			if (status != CL_SUCCESS)fatal("clEnqueueWriteBuffer (%d)\n", status);
+			if (status != CL_SUCCESS)printf("clEnqueueWriteBuffer (%d)\n", status);
 			status = clEnqueueWriteBuffer(queue, nonces_d, CL_TRUE, 0, sizeof(uint32_t) * 1, pnonces, 0, NULL, NULL);
-			if (status != CL_SUCCESS)fatal("clEnqueueWriteBuffer (%d)\n", status);
+			if (status != CL_SUCCESS)printf("clEnqueueWriteBuffer (%d)\n", status);
 			status = clEnqueueWriteBuffer(queue, startNonce_d, CL_TRUE, 0, sizeof(uint32_t) * 1, nonce_sum, 0, NULL, NULL);
-			if (status != CL_SUCCESS)fatal("clEnqueueWriteBuffer (%d)\n", status);
+			if (status != CL_SUCCESS)printf("clEnqueueWriteBuffer (%d)\n", status);
 			
-
+			
 			check_clSetKernelArg(k_verus[0], 0, &startNonce_d);
 			check_clSetKernelArg(k_verus[0], 1, &key_const_d);
 			check_clSetKernelArg(k_verus[0], 2, &verushead_d);
 			check_clSetKernelArg(k_verus[0], 3, &nonces_d);
 			check_clSetKernelArg(k_verus[0], 4, &target_d);
-		//	check_clSetKernelArg(k_verus[0], 5, &data_keylarge_d);
+			check_clSetKernelArg(k_verus[0], 5, &data_keylarge_d);
 			
 			global_ws = VERUS_WORKSIZE;
 			local_work_size = MAIN_THREADS;
+				
 			check_clEnqueueNDRangeKernel(queue, k_verus[0], 1, NULL,
 				&global_ws, &local_work_size, 0, NULL, NULL);
 			clFinish(queue);
-		
 		
 			num_sols = verify_nonce(queue, nonces_d, header,
 				fixed_nonce_bytes, target, job_id, shares, blockhash_half, pnonces);
@@ -1574,10 +1645,23 @@ void mining_mode(cl_device_id dev_id, cl_program program, cl_context ctx, cl_com
 
 }
 #else
-void mining_mode(cl_device_id dev_id, cl_program program, cl_context ctx, cl_command_queue queue,
-	cl_kernel *k_verus, uint8_t *header)
+void mining_mode(
+	cl_device_id *dev_id,
+	cl_program program,
+	cl_context ctx,
+	cl_command_queue queue,
+	cl_kernel k_init_ht,
+	cl_kernel *k_rounds,
+	cl_kernel k_potential_sols,
+	cl_kernel k_sols,
+	cl_mem *buf_ht,
+	cl_mem buf_potential_sols,
+	cl_mem buf_sols,
+	cl_mem buf_dbg,
+	size_t dbg_size,
+	uint8_t *header,
+	cl_mem *rowCounters)
 {
-
 	char		line[4096];
 	uint8_t		target[SHA256_DIGEST_SIZE];
 	char		job_id[256];
@@ -1587,177 +1671,35 @@ void mining_mode(cl_device_id dev_id, cl_program program, cl_context ctx, cl_com
 	uint32_t		shares;
 	uint64_t		total_shares = 0;
 	uint64_t		t0 = 0, t1;
-	uint64_t		status_period = 300e3; // time (usec) between statuses
-	cl_int          status;
-	uint8_t         blockhash_half[64] = { 0 };
-	uint8_t         *ptarget;
-	uint32_t		*pnonces;
-	cl_mem          key_const_d, data_keylarge_d, verushead_d, target_d, nonces_d, startNonce_d;
-	size_t		    global_ws;
-	size_t          local_work_size = 256;
-	uint32_t		nonces_total = 0;
-	uint64_t		*nonce_ptr;
-	uint32_t        *nonce_sum;
-
-	unsigned char block_41970[] = { 0xfd, 0x40, 0x05, 0x01 };
-
-	uint8_t full_data[140 + 3 + 1344] = { 0 };
-	uint8_t* sol_data = &full_data[140];
-
-	//blockhash_half = (uint8_t*)malloc(sizeof(uint8_t) * 64);
-	ptarget = (uint8_t *)malloc(sizeof(uint8_t) * 32);
-	pnonces = (uint32_t *)malloc(sizeof(uint32_t) * 1);
-	nonce_sum = (uint32_t *)malloc(sizeof(uint32_t) * 1);
-	data_key = (u128 *)malloc(VERUS_KEY_SIZE128);
-	uint32_t num_sols;
-
-	key_const_d = check_clCreateBuffer(ctx, CL_MEM_READ_ONLY, sizeof(uint8_t) * VERUS_KEY_SIZE, NULL);
-	verushead_d = check_clCreateBuffer(ctx, CL_MEM_READ_ONLY, sizeof(uint8_t) * 64, NULL);
-	target_d = check_clCreateBuffer(ctx, CL_MEM_READ_ONLY, sizeof(uint8_t) * 32, NULL);
-	nonces_d = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, sizeof(uint32_t) * 2, NULL);
-	startNonce_d = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, sizeof(uint32_t) * 2, NULL);
-	//data_keylarge_d = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, sizeof(uint8_t) * VERUS_KEY_SIZE * (MAIN_THREADS+1), NULL);
-
-	nonce_ptr = (uint64_t *)(header + ZCASH_BLOCK_HEADER_LEN - ZCASH_NONCE_LEN);
-
-//	InitializeCriticalSection(&cs);
+	uint64_t		status_period = 500e3; // time (usec) between statuses
 
 	puts("SILENTARMY mining mode ready");
 	fflush(stdout);
-//	SetConsoleOutputCP(65001);
-	
-	while (1)
+#ifdef WIN32
+	SetConsoleOutputCP(65001);
+#endif
+	for (i = 0; ; i++)
 	{
 		// iteration #0 always reads a job or else there is nothing to do
 
-		nonce_sum[0] = 0;
 		if (read_last_line(line, sizeof(line), !i)) {
-
-		//	EnterCriticalSection(&cs);
 			mining_parse_job(line,
 				target, sizeof(target),
 				job_id, sizeof(job_id),
 				header, ZCASH_BLOCK_HEADER_LEN,
 				&fixed_nonce_bytes);
-	//		LeaveCriticalSection(&cs);
-	
-			memcpy(full_data, header, 140);
-			memcpy(sol_data, block_41970, 4);
-			//memcpy(full_data, data, 1487);
-
-			VerusHashHalf(blockhash_half, (unsigned char*)full_data, 1487);
-
-		//	printf("[CPU]blockhash_half ito verusclmulithout        : ");
-			//for (int i = 0; i < 64; i++)
-		//		printf("%02x", blockhash_half[i]);
-		//	printf("\n");
-
-
-			GenNewCLKey((unsigned char*)blockhash_half, data_key);  
-		//	printf("[CPU]datakey       : ");
-		//	for (int e = 0; e < 64; e++)
-		//		printf("%02x", ((uint8_t*)&data_key[0])[e]);
-		//	printf("\n");
-
-			for (int j = 0; j < 32; j++)
-				ptarget[j] = target[j];
-
-			pnonces[0] = 0xfffffffful;
-			nonce_sum[0] = 0x0ul;
-		// send header,key,target to GPU verus_setBlock(blockhash_half, target, (uint8_t*)data_key, throughput); //set data to gpu kernel
-		
 		}
-		else if (nonce_sum[0] == 0)  //main nonce needs incrementing
-		{
-			
-			// increment bytes 17-19
-			(*(uint32_t *)((uint8_t *)nonce_ptr + 17))++;
-			// byte 20 and above must be zero
-			*(uint32_t *)((uint8_t *)nonce_ptr + 20) = 0;
-
-			memcpy(full_data, header, 140);
-			memcpy(sol_data, block_41970, 4);
-			//memcpy(full_data, header, 1487);
-
-			VerusHashHalf(blockhash_half, (unsigned char*)full_data, 1487);
-			
-		//	printf("[CPU]blockhash_half ito verusclmulithout        : ");
-		//	for (int i = 0; i < 64; i++)
-		//		printf("%02x", blockhash_half[i]);
-		//	printf("\n");
-			
-			GenNewCLKey((unsigned char*)blockhash_half, data_key);
-
-		//	printf("[CPU]datakey       : ");
-		//	for (int e = 0; e < 64; e++)
-		//		printf("%02x", ((uint8_t*)&data_key[0])[e]);
-		//	printf("\n");
-
-			for (int j = 0; j < 32; j++)
-				ptarget[j] = target[j];
-
-			
-			// send header,key,target to GPU verus_setBlock(blockhash_half, target, (uint8_t*)data_key, throughput); //set data to gpu kernel
-
-
-		}
-			pnonces[0] = 0xfffffffful;
-			status = clEnqueueWriteBuffer(queue, verushead_d, CL_TRUE, 0, sizeof(uint8_t) * 64, blockhash_half, 0, NULL, NULL);
-			if (status != CL_SUCCESS)fatal("clEnqueueWriteBuffer (%d)\n", status);
-			status = clEnqueueWriteBuffer(queue, target_d, CL_TRUE, 0, sizeof(uint8_t) * 32, ptarget, 0, NULL, NULL);
-			if (status != CL_SUCCESS)fatal("clEnqueueWriteBuffer (%d)\n", status);
-			status = clEnqueueWriteBuffer(queue, key_const_d, CL_TRUE, 0, sizeof(uint8_t) * VERUS_KEY_SIZE, data_key, 0, NULL, NULL);
-			if (status != CL_SUCCESS)fatal("clEnqueueWriteBuffer (%d)\n", status);
-			status = clEnqueueWriteBuffer(queue, nonces_d, CL_TRUE, 0, sizeof(uint32_t) * 1, pnonces, 0, NULL, NULL);
-			if (status != CL_SUCCESS)fatal("clEnqueueWriteBuffer (%d)\n", status);
-			status = clEnqueueWriteBuffer(queue, startNonce_d, CL_TRUE, 0, sizeof(uint32_t) * 1, nonce_sum, 0, NULL, NULL);
-			if (status != CL_SUCCESS)fatal("clEnqueueWriteBuffer (%d)\n", status);
-			
-
-			check_clSetKernelArg(k_verus[0], 0, &startNonce_d);
-			check_clSetKernelArg(k_verus[0], 1, &key_const_d);
-			check_clSetKernelArg(k_verus[0], 2, &verushead_d);
-			check_clSetKernelArg(k_verus[0], 3, &nonces_d);
-			check_clSetKernelArg(k_verus[0], 4, &target_d);
-		//	check_clSetKernelArg(k_verus[0], 5, &data_keylarge_d);
-			
-			global_ws = VERUS_WORKSIZE;
-			local_work_size = MAIN_THREADS;
-			check_clEnqueueNDRangeKernel(queue, k_verus[0], 1, NULL,
-				&global_ws, &local_work_size, 0, NULL, NULL);
-			clFinish(queue);
-		
-		
-			num_sols = verify_nonce(queue, nonces_d, header,
-				fixed_nonce_bytes, target, job_id, shares, blockhash_half, pnonces);
-		
-
-			total += VERUS_WORKSIZE;
-			total_shares += num_sols;
-			if ((nonce_sum[0] + VERUS_WORKSIZE )< 0xfffffffful)
-				nonce_sum[0] += (uint64_t)global_ws;
-			else
-				nonce_sum[0] = 0;
-
-
+		total += solve_equihash(ctx, queue, k_init_ht, k_rounds, k_potential_sols, k_sols, buf_ht,
+			buf_potential_sols, buf_sols, buf_dbg, dbg_size, header, ZCASH_BLOCK_HEADER_LEN, 1,
+			fixed_nonce_bytes, target, job_id, &shares, rowCounters);
+		total_shares += shares;
 		if ((t1 = now()) > t0 + status_period)
 		{
-
-	//		EnterCriticalSection(&cs);
 			t0 = t1;
-
-			printf("status: %" PRId64 " %" PRId64 "\n", total / 1000000, total_shares);
+			printf("status: %" PRId64 " %" PRId64 "\n", total, total_shares);
 			fflush(stdout);
-	//		LeaveCriticalSection(&cs);
-			//fprintf(stderr, " (%d kh/s)\n",
-			//	(t3 - t2) / 1e3, total / ((t3 - t2) / 1e6) / 1000);
-			//fflush(stdout);
 		}
-
 	}
-
-
-
 }
 #endif
 
