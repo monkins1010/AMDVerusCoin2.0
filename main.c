@@ -1660,7 +1660,7 @@ void mining_mode(cl_device_id dev_id, cl_program program, cl_context ctx, cl_com
 	uint8_t         *blockhash_half; // [64] = { 0 };
 	uint8_t         *ptarget;
 	uint32_t		*pnonces;
-	cl_mem          key_const_d, data_keylarge_d, verushead_d, target_d, nonces_d, startNonce_d;
+	cl_mem          key_const_d, data_keylarge_d, blockhash_half_d, target_d, resnonces_d, startNonce_d, fix_rand, fix_randex, acc_d;
 	size_t		    global_ws;
 	size_t          local_work_size = 256;
 	uint32_t		nonces_total = 0;
@@ -1680,27 +1680,29 @@ void mining_mode(cl_device_id dev_id, cl_program program, cl_context ctx, cl_com
 	uint32_t num_sols;
 
 	key_const_d = check_clCreateBuffer(ctx, CL_MEM_READ_ONLY, sizeof(uint8_t) * VERUS_KEY_SIZE, NULL);
-	verushead_d = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, sizeof(uint8_t) * 64, NULL);
-	target_d = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, sizeof(uint8_t) * 32, NULL);
-	nonces_d = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, sizeof(uint32_t) * 2, NULL);
-	startNonce_d = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, sizeof(uint32_t) * 2, NULL);
-	data_keylarge_d = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, sizeof(uint8_t) * 1, NULL);
-
+	blockhash_half_d = check_clCreateBuffer(ctx, CL_MEM_READ_ONLY, sizeof(uint8_t) * 64, NULL);
+	target_d = check_clCreateBuffer(ctx, CL_MEM_READ_ONLY, sizeof(uint8_t) * 32, NULL);
+	resnonces_d = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, sizeof(uint32_t) * 2, NULL);
+	startNonce_d = check_clCreateBuffer(ctx, CL_MEM_READ_ONLY, sizeof(uint32_t) * 2, NULL);
+	data_keylarge_d = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, sizeof(uint8_t) * VERUS_KEY_SIZE * VERUS_WORKSIZE, NULL);
+	fix_rand = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, sizeof(uint32_t) * VERUS_WORKSIZE * 32, NULL);
+	fix_randex = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, sizeof(uint32_t) * VERUS_WORKSIZE * 32, NULL);
 	nonce_ptr = (uint64_t *)(header + ZCASH_BLOCK_HEADER_LEN - ZCASH_NONCE_LEN);
-
+	acc_d = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, sizeof(uint64_t) * VERUS_WORKSIZE, NULL);
 //	InitializeCriticalSection(&cs);
 
 	puts("SILENTARMY mining mode ready");
 	fflush(stdout);
 //	SetConsoleOutputCP(65001);
-	
+	int started = 0;
 	while (1)
 	{
+		int changed = 0;
 		// iteration #0 always reads a job or else there is nothing to do
 
 		nonce_sum[0] = 0;
 		if (read_last_line(line, sizeof(line), !i)) {
-
+			changed = 1; started = 1;
 	//		EnterCriticalSection(&cs);
 			mining_parse_job(line,
 				target, sizeof(target),
@@ -1714,19 +1716,7 @@ void mining_mode(cl_device_id dev_id, cl_program program, cl_context ctx, cl_com
 			//memcpy(full_data, data, 1487);
 
 			VerusHashHalf(blockhash_half, (unsigned char*)full_data, 1487);
-
-		//	printf("[CPU]blockhash_half ito verusclmulithout        : ");
-			//for (int i = 0; i < 64; i++)
-		//		printf("%02x", blockhash_half[i]);
-		//	printf("\n");
-
-
 			GenNewCLKey((unsigned char*)blockhash_half, data_key);  
-		//	printf("[CPU]datakey       : ");
-		//	for (int e = 0; e < 64; e++)
-		//		printf("%02x", ((uint8_t*)&data_key[0])[e]);
-		//	printf("\n");
-
 			for (int j = 0; j < 32; j++)
 				ptarget[j] = target[j];
 
@@ -1737,7 +1727,7 @@ void mining_mode(cl_device_id dev_id, cl_program program, cl_context ctx, cl_com
 		}
 		else if (nonce_sum[0] == 0)  //main nonce needs incrementing
 		{
-			
+			changed = 1;
 			// increment bytes 17-19
 			(*(uint32_t *)((uint8_t *)nonce_ptr + 17))++;
 			// byte 20 and above must be zero
@@ -1748,81 +1738,114 @@ void mining_mode(cl_device_id dev_id, cl_program program, cl_context ctx, cl_com
 			//memcpy(full_data, header, 1487);
 
 			VerusHashHalf(blockhash_half, (unsigned char*)full_data, 1487);
-			
-		//	printf("[CPU]blockhash_half ito verusclmulithout        : ");
-		//	for (int i = 0; i < 64; i++)
-		//		printf("%02x", blockhash_half[i]);
-		//	printf("\n");
-			
 			GenNewCLKey((unsigned char*)blockhash_half, data_key);
-
-		//	printf("[CPU]datakey       : ");
-		//	for (int e = 0; e < 64; e++)
-		//		printf("%02x", ((uint8_t*)&data_key[0])[e]);
-		//	printf("\n");
 
 			for (int j = 0; j < 32; j++)
 				ptarget[j] = target[j];
 
-			
-			// send header,key,target to GPU verus_setBlock(blockhash_half, target, (uint8_t*)data_key, throughput); //set data to gpu kernel
-
-
 		}
-		
+		if (started) {
+
+
+
+			if (changed == 1) {  // if the main key changes we have to reload the global mem
+
+				status = clEnqueueWriteBuffer(queue, blockhash_half_d, CL_TRUE, 0, sizeof(uint8_t) * 64, blockhash_half, 0, NULL, NULL);
+				if (status != CL_SUCCESS)printf("clEnqueueWriteBuffer (%d)\n", status);
+				status = clEnqueueWriteBuffer(queue, target_d, CL_TRUE, 0, sizeof(uint8_t) * 32, ptarget, 0, NULL, NULL);
+				if (status != CL_SUCCESS)printf("clEnqueueWriteBuffer (%d)\n", status);
+				status = clEnqueueWriteBuffer(queue, key_const_d, CL_TRUE, 0, sizeof(uint8_t) * VERUS_KEY_SIZE, data_key, 0, NULL, NULL);
+				if (status != CL_SUCCESS)printf("clEnqueueWriteBuffer (%d)\n", status);
+
+				check_clSetKernelArg(k_verus[0], 0, &key_const_d);
+				check_clSetKernelArg(k_verus[0], 1, &data_keylarge_d);
+
+
+				global_ws = VERUS_WORKSIZE * 128;
+				local_work_size = 128;
+
+				check_clEnqueueNDRangeKernel(queue, k_verus[0], 1, NULL,
+					&global_ws, &local_work_size, 0, NULL, NULL);
+				clFinish(queue);
+
+			}
+
 			pnonces[0] = 0xfffffffful;
-			status = clEnqueueWriteBuffer(queue, verushead_d, CL_TRUE, 0, sizeof(uint8_t) * 64, blockhash_half, 0, NULL, NULL);
-			if (status != CL_SUCCESS)printf("clEnqueueWriteBuffer (%d)\n", status);
-			status = clEnqueueWriteBuffer(queue, target_d, CL_TRUE, 0, sizeof(uint8_t) * 32, ptarget, 0, NULL, NULL);
-			if (status != CL_SUCCESS)printf("clEnqueueWriteBuffer (%d)\n", status);
-			status = clEnqueueWriteBuffer(queue, key_const_d, CL_TRUE, 0, sizeof(uint8_t) * VERUS_KEY_SIZE, data_key, 0, NULL, NULL);
-			if (status != CL_SUCCESS)printf("clEnqueueWriteBuffer (%d)\n", status);
-			status = clEnqueueWriteBuffer(queue, nonces_d, CL_TRUE, 0, sizeof(uint32_t) * 1, pnonces, 0, NULL, NULL);
+			status = clEnqueueWriteBuffer(queue, resnonces_d, CL_TRUE, 0, sizeof(uint32_t) * 1, pnonces, 0, NULL, NULL);
 			if (status != CL_SUCCESS)printf("clEnqueueWriteBuffer (%d)\n", status);
 			status = clEnqueueWriteBuffer(queue, startNonce_d, CL_TRUE, 0, sizeof(uint32_t) * 1, nonce_sum, 0, NULL, NULL);
 			if (status != CL_SUCCESS)printf("clEnqueueWriteBuffer (%d)\n", status);
-			
-			
-			check_clSetKernelArg(k_verus[0], 0, &startNonce_d);
-			check_clSetKernelArg(k_verus[0], 1, &key_const_d);
-			check_clSetKernelArg(k_verus[0], 2, &verushead_d);
-			check_clSetKernelArg(k_verus[0], 3, &nonces_d);
-			check_clSetKernelArg(k_verus[0], 4, &target_d);
-			check_clSetKernelArg(k_verus[0], 5, &data_keylarge_d);
-			
+
+
+			check_clSetKernelArg(k_verus[1], 0, &startNonce_d);
+			check_clSetKernelArg(k_verus[1], 1, &blockhash_half_d);
+			check_clSetKernelArg(k_verus[1], 2, &data_keylarge_d);
+			check_clSetKernelArg(k_verus[1], 3, &acc_d);
+			check_clSetKernelArg(k_verus[1], 4, &fix_rand);
+			check_clSetKernelArg(k_verus[1], 5, &fix_randex);
+
 			global_ws = VERUS_WORKSIZE;
 			local_work_size = MAIN_THREADS;
-				
-			check_clEnqueueNDRangeKernel(queue, k_verus[0], 1, NULL,
+
+			check_clEnqueueNDRangeKernel(queue, k_verus[1], 1, NULL,
 				&global_ws, &local_work_size, 0, NULL, NULL);
+
+			clFinish(queue);  //maybe remove???
+
+			check_clSetKernelArg(k_verus[2], 0, &startNonce_d);
+			check_clSetKernelArg(k_verus[2], 1, &blockhash_half_d);
+			check_clSetKernelArg(k_verus[2], 2, &target_d);
+			check_clSetKernelArg(k_verus[2], 3, &resnonces_d);
+			check_clSetKernelArg(k_verus[2], 4, &data_keylarge_d);
+			check_clSetKernelArg(k_verus[2], 5, &acc_d);
+
+
+			global_ws = VERUS_WORKSIZE;
+			local_work_size = 256;
+
+			check_clEnqueueNDRangeKernel(queue, k_verus[2], 1, NULL,
+				&global_ws, &local_work_size, 0, NULL, NULL);
+
 			clFinish(queue);
-		
-			num_sols = verify_nonce(queue, nonces_d, header,
+
+			num_sols = verify_nonce(queue, resnonces_d, header,
 				fixed_nonce_bytes, target, job_id, shares, blockhash_half, pnonces);
-		
+
+			check_clSetKernelArg(k_verus[3], 0, &key_const_d);
+			check_clSetKernelArg(k_verus[3], 1, &data_keylarge_d);
+			check_clSetKernelArg(k_verus[3], 2, &fix_rand);
+			check_clSetKernelArg(k_verus[3], 3, &fix_randex);
+
+			global_ws = VERUS_WORKSIZE * 32;
+			local_work_size = 32;
+
+			check_clEnqueueNDRangeKernel(queue, k_verus[3], 1, NULL,
+				&global_ws, &local_work_size, 0, NULL, NULL);
+
+			clFinish(queue);
 
 			total += VERUS_WORKSIZE;
 			total_shares += num_sols;
-			if ((nonce_sum[0] + VERUS_WORKSIZE )< 0xfffffffful)
-				nonce_sum[0] += (uint64_t)global_ws;
+			if ((nonce_sum[0] + VERUS_WORKSIZE) < 0xfffffffful)
+				nonce_sum[0] += VERUS_WORKSIZE;
 			else
 				nonce_sum[0] = 0;
 
 
-		if ((t1 = now()) > t0 + status_period)
-		{
+			if ((t1 = now()) > t0 + status_period)
+			{
 
-	//		EnterCriticalSection(&cs);
-			t0 = t1;
+	//			EnterCriticalSection(&cs);
+				t0 = t1;
 
-			printf("status: %" PRId64 " %" PRId64 "\n", total / 1000000, total_shares);
-			fflush(stdout);
-	//		LeaveCriticalSection(&cs);
-			//fprintf(stderr, " (%d kh/s)\n",
-			//	(t3 - t2) / 1e3, total / ((t3 - t2) / 1e6) / 1000);
-			//fflush(stdout);
+				printf("status: %" PRId64 " %" PRId64 "\n", total / 1000000, total_shares);
+				fflush(stdout);
+		//		LeaveCriticalSection(&cs);
+				//fprintf(stderr, " (%d kh/s)\n",
+				//	(t3 - t2) / 1e3, total / ((t3 - t2) / 1e6) / 1000);
+				//fflush(stdout);
+			}
 		}
-
 	}
 
 
@@ -1984,18 +2007,18 @@ void init_and_run_opencl(uint8_t *header, size_t header_len)
 		get_program_bins(program);
 		// Create kernel objects
 		
-		k_verus[0] = clCreateKernel(program, "verus_gpu_hash", &status);
+		k_verus[0] = clCreateKernel(program, "verus_key", &status);
 		if (status != CL_SUCCESS || !k_verus[0])
 			fatal("clCreateKernel1 (%d)\n", status);
-	//	k_verus[1] = clCreateKernel(program, "verus_gpu_hash", &status);
-	//	if (status != CL_SUCCESS || !k_verus[1])
-	//		fatal("clCreateKernel2 (%d)\n", status);
-	//	k_verus[2] = clCreateKernel(program, "verus_gpu_final", &status);
-	//	if (status != CL_SUCCESS || !k_verus[2])
-	//		fatal("clCreateKernel3 (%d)\n", status);
-	//	k_verus[3] = clCreateKernel(program, "verus_extra_gpu_fix", &status);
-	//	if (status != CL_SUCCESS || !k_verus[3])
-	//		fatal("clCreateKernel4 (%d)\n", status);
+		k_verus[1] = clCreateKernel(program, "verus_gpu_hash", &status);
+		if (status != CL_SUCCESS || !k_verus[1])
+			fatal("clCreateKernel2 (%d)\n", status);
+		k_verus[2] = clCreateKernel(program, "verus_gpu_final", &status);
+		if (status != CL_SUCCESS || !k_verus[2])
+			fatal("clCreateKernel3 (%d)\n", status);
+		k_verus[3] = clCreateKernel(program, "verus_extra_gpu_fix", &status);
+		if (status != CL_SUCCESS || !k_verus[3])
+			fatal("clCreateKernel4 (%d)\n", status);
 	
 
 	// Run
